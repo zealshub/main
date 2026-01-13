@@ -40,6 +40,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install jq
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Final sanity check
+        shell: bash
+        run: |
+          echo "IMAGE = '${{ needs.build_and_push.outputs.image }}'"
+          echo "KASM_URL = '${{ secrets.KASM_URL }}'"
+
       - name: Debug (image + files + Kasm URL)
         shell: bash
         run: |
