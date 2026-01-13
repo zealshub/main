@@ -1,4 +1,4 @@
-FROM kasmweb/alpine-321-desktop:1.18.0-rolling-daily
+FROM kasmweb/core-ubuntu-focal:1.16.1-rolling-daily
 USER root
 
 ENV HOME /home/kasm-default-profile
