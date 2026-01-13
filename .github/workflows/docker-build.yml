@@ -4,22 +4,16 @@ on:
   push:
     branches: ["main"]
 
+# ✅ ADD this block (global IMAGE usable in both jobs; no job outputs needed)
+env:
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/my-app:${{ github.sha }}
+
 jobs:
+  # ✅ REPLACE your build job with this
   build_and_push:
     runs-on: ubuntu-latest
-    outputs:
-      image: ${{ steps.meta.outputs.image }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Compute image tag
-        id: meta
-        shell: bash
-        run: |
-          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/my-app:${{ github.sha }}"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
-          echo "Built tag: $IMAGE"
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -30,10 +24,12 @@ jobs:
       - name: Build & Push
         shell: bash
         run: |
-          echo "Using IMAGE=$IMAGE"
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
+          set -euo pipefail
+          echo "Using IMAGE=${IMAGE}"
+          docker build -t "${IMAGE}" .
+          docker push "${IMAGE}"
 
+  # ✅ ADD (or MOVE) this job under jobs: (indentation matters)
   kasm:
     runs-on: ubuntu-latest
     needs: build_and_push
@@ -46,28 +42,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq
 
-      - name: Final sanity check
-        shell: bash
-        run: |
-          echo "IMAGE = '${{ needs.build_and_push.outputs.image }}'"
-          echo "KASM_URL = '${{ secrets.KASM_URL }}'"
-
-      - name: Debug (image + files + Kasm URL)
-        shell: bash
-        run: |
-          echo "IMAGE_FROM_NEEDS='${{ needs.build_and_push.outputs.image }}'"
-          echo "KASM_URL='${{ secrets.KASM_URL }}'"
-          ls -la
-          find . -maxdepth 4 -type f -name "kasm-image.json" -print
-
       - name: Register Image in Kasm
         shell: bash
         run: |
           set -euo pipefail
 
-          IMAGE="${{ needs.build_and_push.outputs.image }}"
           if [[ -z "${IMAGE}" ]]; then
-            echo "ERROR: IMAGE output is empty. Check build job step meta wrote GITHUB_OUTPUT."
+            echo "ERROR: IMAGE is empty."
             exit 1
           fi
 
@@ -81,9 +62,9 @@ jobs:
             exit 3
           fi
 
-          echo "Registering IMAGE: $IMAGE"
+          echo "Registering IMAGE: ${IMAGE}"
 
-          jq --arg img "$IMAGE" '.target_image.image_src = $img' kasm-image.json > kasm-image.rendered.json
+          jq --arg img "${IMAGE}" '.target_image.image_src = $img' kasm-image.json > kasm-image.rendered.json
 
           payload="$(jq -c \
             --arg k "${{ secrets.KASM_API_KEY }}" \
@@ -92,7 +73,6 @@ jobs:
             kasm-image.rendered.json \
           )"
 
-          echo "Calling: ${{ secrets.KASM_URL }}/api/public/update_image"
           curl -k -sS -X POST "${{ secrets.KASM_URL }}/api/public/update_image" \
             -H "Content-Type: application/json" \
             -d "$payload"
