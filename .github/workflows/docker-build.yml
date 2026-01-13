@@ -4,9 +4,6 @@ on:
   push:
     branches: ["main"]
 
-env:
-  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/my-app:${{ github.sha }}
-
 jobs:
   build_and_push:
     runs-on: ubuntu-latest
@@ -15,11 +12,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set image output
+      - name: Compute image tag
         id: meta
+        shell: bash
         run: |
-          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
-          echo "IMAGE=${IMAGE}"
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/my-app:${{ github.sha }}"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "Built tag: $IMAGE"
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -28,9 +28,11 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Build & Push
+        shell: bash
         run: |
-          docker build -t "${IMAGE}" .
-          docker push "${IMAGE}"
+          echo "Using IMAGE=$IMAGE"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
 
   kasm:
     runs-on: ubuntu-latest
@@ -39,6 +41,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Debug (image + files + Kasm URL)
+        shell: bash
         run: |
           echo "IMAGE_FROM_NEEDS='${{ needs.build_and_push.outputs.image }}'"
           echo "KASM_URL='${{ secrets.KASM_URL }}'"
@@ -46,20 +49,22 @@ jobs:
           find . -maxdepth 4 -type f -name "kasm-image.json" -print
 
       - name: Register Image in Kasm
+        shell: bash
         run: |
+          set -euo pipefail
+
           IMAGE="${{ needs.build_and_push.outputs.image }}"
-          if [ -z "$IMAGE" ]; then
-            echo "ERROR: IMAGE output is empty. Check job id and outputs."
+          if [[ -z "${IMAGE}" ]]; then
+            echo "ERROR: IMAGE output is empty. Check build job step meta wrote GITHUB_OUTPUT."
             exit 1
           fi
 
-          if [ ! -f "kasm-image.json" ]; then
+          if [[ ! -f "kasm-image.json" ]]; then
             echo "ERROR: kasm-image.json not found in repo root."
-            echo "Fix: commit the file or update path in workflow."
             exit 2
           fi
 
-          if [ -z "${{ secrets.KASM_URL }}" ]; then
+          if [[ -z "${{ secrets.KASM_URL }}" ]]; then
             echo "ERROR: KASM_URL secret is empty or not set."
             exit 3
           fi
@@ -68,11 +73,14 @@ jobs:
 
           jq --arg img "$IMAGE" '.target_image.image_src = $img' kasm-image.json > kasm-image.rendered.json
 
-          curl -k -X POST "${{ secrets.KASM_URL }}/api/public/update_image" \
+          payload="$(jq -c \
+            --arg k "${{ secrets.KASM_API_KEY }}" \
+            --arg s "${{ secrets.KASM_API_KEY_SECRET }}" \
+            '. + {api_key:$k, api_key_secret:$s}' \
+            kasm-image.rendered.json \
+          )"
+
+          echo "Calling: ${{ secrets.KASM_URL }}/api/public/update_image"
+          curl -k -sS -X POST "${{ secrets.KASM_URL }}/api/public/update_image" \
             -H "Content-Type: application/json" \
-            -d "$(jq -c \
-              --arg k "${{ secrets.KASM_API_KEY }}" \
-              --arg s "${{ secrets.KASM_API_KEY_SECRET }}" \
-              '. + {api_key:$k, api_key_secret:$s}' \
-              kasm-image.rendered.json
-            )"
+            -d "$payload"
