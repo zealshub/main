@@ -1,0 +1,13 @@
+KASM_JSON_PATH="kasm-image.json"   # change this if it's in a folder
+
+if [[ ! -f "$KASM_JSON_PATH" ]]; then
+  echo "ERROR: $KASM_JSON_PATH not found."
+  echo "Files in workspace:"
+  ls -la
+  echo "Find kasm-image.json anywhere:"
+  find . -maxdepth 5 -iname "kasm-image.json" -print
+  exit 2
+fi
+
+jq --arg img "${IMAGE}" '.target_image.image_src = $img' \
+  "$KASM_JSON_PATH" > kasm-image.rendered.json
