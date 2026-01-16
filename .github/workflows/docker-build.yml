@@ -1,0 +1,81 @@
+name: Build, Push, Register in Kasm
+
+on:
+  push:
+    branches: ["main"]
+
+# Global IMAGE usable in both jobs
+env:
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/my-app:${{ github.sha }}
+
+jobs:
+  build_and_push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: Build & Push
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Using IMAGE=${IMAGE}"
+          docker build -t "${IMAGE}" .
+          docker push "${IMAGE}"
+
+  kasm:
+    runs-on: ubuntu-latest
+    needs: build_and_push
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Register Image in Kasm
+        shell: bash
+        env:
+          KASM_URL: ${{ secrets.KASM_URL }}
+          KASM_API_KEY: ${{ secrets.KASM_API_KEY }}
+          KASM_API_KEY_SECRET: ${{ secrets.KASM_API_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${IMAGE:-}" ]]; then
+            echo "ERROR: IMAGE is empty or not set."
+            exit 1
+          fi
+
+          if [[ ! -f "kasm-image.json" ]]; then
+            echo "ERROR: kasm-image.json not found in repo root."
+            exit 2
+          fi
+
+          if [[ -z "${KASM_URL:-}" ]]; then
+            echo "ERROR: KASM_URL secret is empty or not set."
+            exit 3
+          fi
+
+          echo "Registering IMAGE: ${IMAGE}"
+
+          jq --arg img "${IMAGE}" '.target_image.image_src = $img' \
+            kasm-image.json > kasm-image.rendered.json
+
+          payload="$(jq -c \
+            --arg k "${KASM_API_KEY}" \
+            --arg s "${KASM_API_KEY_SECRET}" \
+            '. + {api_key:$k, api_key_secret:$s}' \
+            kasm-image.rendered.json
+          )"
+
+          curl -k -sS -X POST "${KASM_URL}/api/public/update_image" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
